@@ -1,0 +1,3 @@
+# ignore certificates
+*.cert
+*.key

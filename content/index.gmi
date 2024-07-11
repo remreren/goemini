@@ -1,0 +1,6 @@
+# Blog by Emre
+
+This website has only single reason; to showcase gemini protocol.
+
+=> /about/ About
+=> /gemini.png Logo
