@@ -4,3 +4,5 @@ This website has only single reason; to showcase gemini protocol.
 
 => /about/ About
 => /gemini.png Logo
+
+=> gemini://geminiprotocol.net Gemini protocol capsulet
