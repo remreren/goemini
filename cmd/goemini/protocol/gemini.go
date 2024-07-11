@@ -31,6 +31,11 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+var (
+	ErrBadRequest   = errors.New("bad request")
+	ErrFileNotFound = errors.New("file not found")
+)
+
 func Execute() error {
 	return rootCmd.Execute()
 }
@@ -42,6 +47,18 @@ func init() {
 }
 
 func _start() {
+	var err error
+
+	servePath, err = filepath.EvalSymlinks(servePath)
+	if err != nil {
+		log.Fatalf("Failed to evaluate symlinks: %v", err)
+	}
+
+	servePath, err = filepath.Abs(servePath)
+	if err != nil {
+		log.Fatalf("Failed to get absolute path: %v", err)
+	}
+
 	mime.AddExtensionType(".gmi", "text/gemini")
 	mime.AddExtensionType(".gmni", "text/gemini")
 	mime.AddExtensionType(".gemini", "text/gemini")
@@ -73,10 +90,30 @@ func _start() {
 }
 
 func readFile(path string) ([]byte, string, error) {
+	var err error
 	// merge "servePath" with the path we got from last step
 	// Example1: ./ + index.gmi -> ./index.gmi
 	// Example2: ./ + other/page.gmi -> ./other/page.gmi
+	path = filepath.Clean(path)
 	path = filepath.Join(servePath, path)
+
+	path, err = filepath.EvalSymlinks(path)
+	if err != nil {
+		log.Printf("Failed to evaluate symlinks: %v", err)
+		return nil, "", ErrBadRequest
+	}
+
+	path, err = filepath.Abs(path)
+	if err != nil {
+		log.Printf("Failed to get absolute path: %v", err)
+		return nil, "", ErrBadRequest
+	}
+
+	// check for the traversal attack
+	if !strings.HasPrefix(path, servePath) {
+		log.Printf("Path is not in the serve path: %s", path)
+		return nil, "", errors.New("you naughty hacker :)")
+	}
 
 	// guess mime type based on file extension
 	mimetype := mime.TypeByExtension(filepath.Ext(path))
@@ -84,7 +121,7 @@ func readFile(path string) ([]byte, string, error) {
 	file, err := os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
 		log.Printf("Failed to open file: %v", err)
-		return nil, "", err
+		return nil, "", ErrFileNotFound
 	}
 	defer file.Close()
 
@@ -134,7 +171,8 @@ func handleConnection(conn net.Conn) {
 
 	content, mime, err := readFile(path)
 	if err != nil {
-		sendResponse(conn, "51 Not found\r\n")
+		message := fmt.Sprintf("51 %s\r\n", err)
+		sendResponse(conn, message)
 		return
 	}
 
