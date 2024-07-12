@@ -1,8 +1,6 @@
 package protocol
 
 import (
-	"bufio"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	tls "github.com/secure-for-ai/goktls" // change this via "crypto/tls"
 
 	"github.com/spf13/cobra"
 )
@@ -85,15 +85,26 @@ func _start() {
 			log.Printf("Failed to accept connection: %v", err)
 			continue
 		}
+		// print type of conn
+		// println(fmt.Sprintf("%T", conn))
 		go handleConnection(conn)
 	}
 }
 
-func readFile(path string) ([]byte, string, error) {
+func sendFile(file *os.File, conn net.Conn) error {
+	defer file.Close()
+
+	_, err := io.Copy(conn, file)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func getFile(path string) (*os.File, string, error) {
 	var err error
-	// merge "servePath" with the path we got from last step
-	// Example1: ./ + index.gmi -> ./index.gmi
-	// Example2: ./ + other/page.gmi -> ./other/page.gmi
+
 	path = filepath.Clean(path)
 	path = filepath.Join(servePath, path)
 
@@ -123,30 +134,8 @@ func readFile(path string) ([]byte, string, error) {
 		log.Printf("Failed to open file: %v", err)
 		return nil, "", ErrFileNotFound
 	}
-	defer file.Close()
 
-	br := bufio.NewReader(file)
-
-	buffer := make([]byte, 4096)
-	content := make([]byte, 0)
-
-	for {
-
-		b, err := br.Read(buffer)
-
-		if err != nil && !errors.Is(err, io.EOF) {
-			fmt.Println(err)
-			break
-		}
-
-		if err != nil {
-			break
-		}
-
-		content = append(content, buffer[:b]...)
-	}
-
-	return content, mimetype, nil
+	return file, mimetype, nil
 }
 
 func handleConnection(conn net.Conn) {
@@ -162,49 +151,51 @@ func handleConnection(conn net.Conn) {
 	request := string(buf[:n])
 	log.Printf("Received request: %s", request)
 
-	path := parseRequestPath(request)
+	path, err := parseRequestPath(request)
+	if err != nil {
+		response := "59 Bad Request\r\n"
+		conn.Write([]byte(response))
+		return
+	}
 
 	// if path has suffix "/" or empty, then append "index.gmi" to it
 	if path == "" || strings.HasSuffix(path, "/") {
 		path += "index.gmi"
 	}
 
-	content, mime, err := readFile(path)
+	file, mime, err := getFile(path)
+
 	if err != nil {
-		message := fmt.Sprintf("51 %s\r\n", err)
-		sendResponse(conn, message)
+		if errors.Is(err, ErrFileNotFound) {
+			response := "51 Not Found\r\n"
+			conn.Write([]byte(response))
+			return
+		}
+	}
+
+	_, err = conn.Write([]byte(fmt.Sprintf("20 %s\r\n", mime)))
+	if err != nil {
+		log.Printf("Failed to send response: %v", err)
 		return
 	}
 
-	response := fmt.Sprintf("20 %s\r\n%s", mime, content)
-
-	sendResponse(conn, response)
+	err = sendFile(file, conn)
+	if err != nil {
+		log.Printf("Failed to send file: %v", err)
+		return
+	}
 }
 
-func parseRequestPath(request string) string {
+func parseRequestPath(request string) (string, error) {
 	request = strings.TrimSpace(request)
 	if !strings.HasPrefix(request, "gemini://") {
-		return ""
+		return "", ErrBadRequest
 	}
 
-	// Remove the "gemini://" prefix
-	// Example: gemini://localhost/index.gmi -> localhost/index.gmi
 	request = strings.TrimPrefix(request, "gemini://")
 
-	// Then split the request into domain and path
-	// Example1: localhost/index.gmi -> [localhost, index.gmi]
-	// Example2: localhost/other/page.gmi -> [localhost, other/page.gmi]
-	// Example3: localhost/other/ or localhost/other -> [localhost, other]
-	// Discard the domain part and get the path part
 	parts := strings.SplitN(request, "/", 2)
 	path := parts[1]
 
-	return path
-}
-
-func sendResponse(conn net.Conn, response string) {
-	_, err := conn.Write([]byte(response))
-	if err != nil {
-		log.Printf("Failed to send response: %v", err)
-	}
+	return path, nil
 }
