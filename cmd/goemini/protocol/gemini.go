@@ -8,8 +8,11 @@ import (
 	"mime"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
+	"syscall"
 
 	tls "github.com/secure-for-ai/goktls" // change this via "crypto/tls"
 
@@ -20,12 +23,13 @@ var (
 	keyFile   string
 	certFile  string
 	servePath string
+	debug     bool
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "goemini",
 	Short: "Static gemini server.",
-	Long:  `A static server uses gemini protocol to serve gemini files.`,
+	Long:  "A static server uses gemini protocol to serve gemini files.",
 	Run: func(cmd *cobra.Command, args []string) {
 		_start()
 	},
@@ -44,6 +48,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&servePath, "path", "p", "./", "The path to serve the files.")
 	rootCmd.Flags().StringVarP(&certFile, "cert", "c", "gemini.cert", "The path to the certificate file.")
 	rootCmd.Flags().StringVarP(&keyFile, "key", "k", "gemini.key", "The path to the key file.")
+	rootCmd.Flags().BoolVarP(&debug, "debug", "d", false, "Enable debug mode.")
 }
 
 func _start() {
@@ -79,14 +84,46 @@ func _start() {
 
 	log.Println("Gemini server is running on port 1965")
 
+	if debug {
+		f, err := os.Create("cpu.prof")
+		if err != nil {
+			log.Fatalf("Failed to create cpu profile: %v", err)
+		}
+		defer f.Close()
+
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatalf("Failed to start cpu profile: %v", err)
+		}
+
+		defer pprof.StopCPUProfile()
+	}
+
+	// Channel to listen for interrupt signals
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	// Channel to signal the shutdown of the server
+	shutdownChan := make(chan struct{})
+
+	go func() {
+		<-signalChan
+		log.Println("Received interrupt signal, shutting down gracefully...")
+		listener.Close()
+		close(shutdownChan)
+	}()
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
+			select {
+			case <-shutdownChan:
+				log.Println("Server shut down gracefully")
+				return
+			default:
+				log.Printf("Failed to accept connection: %v", err)
+			}
 			continue
 		}
-		// print type of conn
-		// println(fmt.Sprintf("%T", conn))
 		go handleConnection(conn)
 	}
 }
