@@ -14,7 +14,9 @@ import (
 	"strings"
 	"syscall"
 
-	tls "github.com/secure-for-ai/goktls" // change this via "crypto/tls"
+	// tls "github.com/secure-for-ai/goktls" // WARN: use this when you want to use ktls. it did not work on docker image without any changes done
+
+	"crypto/tls"
 
 	"github.com/spf13/cobra"
 )
@@ -176,6 +178,8 @@ func getFile(path string) (*os.File, string, error) {
 }
 
 func handleConnection(conn net.Conn) {
+	log.Printf("Accepted connection from: %s", conn.RemoteAddr())
+
 	defer conn.Close()
 
 	buf := make([]byte, 4096)
